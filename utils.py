@@ -37,8 +37,13 @@ class BMPViewer(QWidget):
         self.g_button = QCheckBox("G")
         self.b_button = QCheckBox("B")
 
+        self.r_button.clicked.connect(self.toggle_r)
+        self.g_button.clicked.connect(self.toggle_g)
+        self.b_button.clicked.connect(self.toggle_b)
+
         for btn in (self.r_button, self.g_button, self.b_button):
-            btn.setFixedSize(30, 30)
+            btn.setChecked(True)
+            btn.setFixedSize(30, 30)            
             top_layout.addWidget(btn)
 
         layout.addLayout(top_layout)
@@ -56,24 +61,26 @@ class BMPViewer(QWidget):
         self.brightness_slider = QSlider(Qt.Horizontal)
         self.brightness_slider.setRange(0, 100)
         self.brightness_slider.setValue(100)
+        self.brightness_slider.valueChanged.connect(self.update_image)
         layout.addWidget(QLabel("Brightness"))
         layout.addWidget(self.brightness_slider)
 
         self.scale_slider = QSlider(Qt.Horizontal)
         self.scale_slider.setRange(1, 100)
         self.scale_slider.setValue(100)
+        self.scale_slider.valueChanged.connect(self.update_image)
         layout.addWidget(QLabel("Scale"))
         layout.addWidget(self.scale_slider)
 
         self.setLayout(layout)
 
     def open_file(self):
-        filepath = QFileDialog.getOpenFileNames(self, "Open BMP File", "","BMP Files (*.bmp)")
+        filepath, _ = QFileDialog.getOpenFileName(self, "Open BMP File", "", "BMP Files (*.bmp)")
         if not filepath:
             return
         
         parser = BMPParser(filepath)
-        parser.load
+        parser.load()
 
         meta_text = ""
         for k, v in parser.metadata.items():
@@ -82,11 +89,16 @@ class BMPViewer(QWidget):
 
         self.original_pixels = parser.pixel_data
         self.width = parser.metadata["width"]
-        self.height = parser.metadata["height"]
+        self.height = abs(parser.metadata["height"])
 
         self.update_image()
 
     def update_image(self):
+        if self.original_pixels is None:
+            return
+
+        self.brightness = self.brightness_slider.value() / 100.0
+        self.scale = self.scale_slider.value() / 100.0
 
         new_w = int(self.width * self.scale)
         new_h = int(self.height * self.scale)
@@ -95,8 +107,39 @@ class BMPViewer(QWidget):
 
         for y in range(new_h):
             for x in range(new_w):
-                a
+                
+                src_x = int(x / self.scale)
+                src_y = int(y / self.scale)
 
+                R, G, B = self.original_pixels[src_y][src_x]
+
+                if not self.r_enabled:
+                    R = 0
+                if not self.g_enabled:
+                    G = 0
+                if not self.b_enabled:
+                    B = 0
+
+                R = int(R * self.brightness)
+                G = int(G * self.brightness)
+                B = int(B * self.brightness)
+
+                image.setPixel(x, y, qRgb(R, G, B))
+
+        pixmap = QPixmap.fromImage(image)
+        self.image_label.setPixmap(pixmap)
+        
+    def toggle_r(self):
+        self.r_enabled = self.r_button.isChecked()
+        self.update_image()
+
+    def toggle_g(self):
+        self.g_enabled = self.g_button.isChecked()
+        self.update_image()
+
+    def toggle_b(self):
+        self.b_enabled = self.b_button.isChecked()
+        self.update_image()
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
