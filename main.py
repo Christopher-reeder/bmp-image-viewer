@@ -1,3 +1,8 @@
+# NOTE: For displaying the parsed image in a GUI,
+#       please download PyQt5.
+#
+# Installation (in terminal):
+#   pip install PyQt5
 import sys
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QPushButton, QLabel,
