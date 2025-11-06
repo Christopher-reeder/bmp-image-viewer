@@ -11,6 +11,7 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtGui import QPixmap, QImage, qRgb
 from PyQt5.QtCore import Qt
 from bmp_parser import BMPParser
+from compressor import BMPCompressor, BMPDecompressor
 
 class BMPViewer(QWidget):
     def __init__(self):
@@ -36,9 +37,21 @@ class BMPViewer(QWidget):
 
         # Button to open BMP file
         self.open_button = QPushButton("Open BMP File")
-        self.open_button.setFixedSize(120, 50)
+        self.open_button.setFixedSize(150, 50)
         self.open_button.clicked.connect(self.open_file)
         top_layout.addWidget(self.open_button)
+
+        # Button to compress BMP file
+        self.compress_button = QPushButton("Compress BMP File")
+        self.compress_button.setFixedSize(150, 50)
+        self.compress_button.clicked.connect(self.compress_file)
+        top_layout.addWidget(self.compress_button)
+
+        # Button to decompress BMP file
+        self.decompress_button = QPushButton("Decompress BMP File")
+        self.decompress_button.setFixedSize(150, 50)
+        self.decompress_button.clicked.connect(self.decompress_file)
+        top_layout.addWidget(self.decompress_button)
 
         top_layout.addStretch()
 
@@ -162,6 +175,12 @@ class BMPViewer(QWidget):
     def toggle_b(self):
         self.b_enabled = self.b_button.isChecked()
         self.update_image()
+
+    def compress_file(self):
+        pass
+
+    def decompress_file(self):
+        pass
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
