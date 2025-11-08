@@ -80,6 +80,7 @@ class BMPViewer(QWidget):
 
         # Text box to display BMP metadata
         self.metadata_box = QTextEdit("No Metadata Loaded")
+        self.metadata_box.setMinimumHeight(150)
         self.metadata_box.setReadOnly(True)
         layout.addWidget(self.metadata_box)
 
@@ -120,6 +121,9 @@ class BMPViewer(QWidget):
         self.original_pixels = parser.pixel_data
         self.width = parser.metadata["width"]
         self.height = abs(parser.metadata["height"])
+
+        # remember current opened file path so compressor can use real file size
+        self.current_filepath = filepath
 
         self.update_image()
 
@@ -177,7 +181,21 @@ class BMPViewer(QWidget):
         self.update_image()
 
     def compress_file(self):
-        pass
+        if self.original_pixels is None:
+            return
+        
+        output_filepath, _ = QFileDialog.getSaveFileName(self, "save compressed file", "", "CMPT365 Files (*.cmpt365)")
+        if not output_filepath:
+            return
+        
+        compressor = BMPCompressor()
+        info = compressor.compress(self.original_pixels, output_filepath, self.current_filepath)
+
+        self.metadata_box.append(f"Compressed to {output_filepath}")
+        self.metadata_box.append(f"Original size: {info['original_size']} bytes")
+        self.metadata_box.append(f"Compressed size: {info['compressed_size']} bytes")
+        self.metadata_box.append(f"Compression ratio: {info['ratio']:.3f}")
+        self.metadata_box.append(f"Time: {info['time_ms']:.2f} ms")
 
     def decompress_file(self):
         pass
