@@ -4,7 +4,8 @@ import os
 class BMPCompressor:
 
     def __init__(self):
-        self.max_dict_size = 4096
+        # allow larger palettes by increasing dictionary size to 65536
+        self.max_dict_size = 65536
 
     def compress(self, pixel_data, output_file, input_path):
         # flatten pixels as symbols, tuples
@@ -32,19 +33,11 @@ class BMPCompressor:
         codes = self._lzw_on_indices(indices)
         end_time = time.time()
 
-        # pack codes as 12-bit LSB-first
+        # pack codes as 16-bit little-endian words (fixed width)
         packed = bytearray()
-        acc = 0
-        bits = 0
         for code in codes:
-            acc |= (code & 0xFFF) << bits
-            bits += 12
-            while bits >= 8:
-                packed.append(acc & 0xFF)
-                acc >>= 8
-                bits -= 8
-        if bits > 0:
-            packed.append(acc & 0xFF)
+            # append 16-bit little-endian representation of each code
+            packed += code.to_bytes(2, 'little')
 
         # write file: magic + original size + width + height + palette + data
         with open(output_file, 'wb') as f:
@@ -97,4 +90,80 @@ class BMPCompressor:
 
 
 class BMPDecompressor:
-    pass
+    def decompress(self, input_file):
+
+        with open(input_file, 'rb') as f:
+            data = f.read()
+
+        if not data.startswith(b"CMPT365"):
+            raise ValueError("Not a CMPT365 file")
+
+        pos = 7
+        original_size = int.from_bytes(data[pos:pos+4], 'big'); pos += 4
+        width = int.from_bytes(data[pos:pos+4], 'big'); pos += 4
+        height = int.from_bytes(data[pos:pos+4], 'big'); pos += 4
+        palette_len = int.from_bytes(data[pos:pos+2], 'big'); pos += 2
+
+        palette = []
+        for _ in range(palette_len):
+            r = data[pos]; g = data[pos+1]; b = data[pos+2]
+            palette.append((r, g, b))
+            pos += 3
+
+        packed = data[pos:]
+
+        # unpack 16-bit little-endian codes
+        # If packed length is odd, ignore the final partial byte.
+        codes = [int.from_bytes(packed[i:i+2], 'little') for i in range(0, len(packed) - (len(packed) % 2), 2)]
+
+        # LZW decompression on integer symbols
+        dict_size = len(palette)
+        dictionary = { i: (i,) for i in range(dict_size) }
+        max_dict_size = 65536
+
+        result_indices = []
+        if not codes:
+            # empty payload -> return blank image rows
+            rows = [ [ (0,0,0) for _ in range(width) ] for _ in range(height) ]
+            return (rows, width, height, original_size)
+
+        prev_code = codes[0]
+        # prev_code should be in dictionary
+        if prev_code not in dictionary:
+            raise ValueError("Corrupt compressed data: first code invalid")
+        result_indices.extend(dictionary[prev_code])
+
+        for code in codes[1:]:
+            if code in dictionary:
+                entry = dictionary[code]
+            elif code == dict_size:
+                entry = dictionary[prev_code] + (dictionary[prev_code][0],)
+            else:
+                raise ValueError("Bad compressed code")
+
+            result_indices.extend(entry)
+
+            # add new sequence to dictionary
+            if dict_size < max_dict_size:
+                dictionary[dict_size] = dictionary[prev_code] + (entry[0],)
+                dict_size += 1
+
+            prev_code = code
+
+        # map indices back to pixels and reshape into rows
+        pixels = [ palette[i] for i in result_indices ]
+
+        rows = []
+        idx = 0
+        for _ in range(height):
+            row = []
+            for _ in range(width):
+                # guard against truncated data
+                if idx < len(pixels):
+                    row.append(pixels[idx])
+                else:
+                    row.append((0,0,0))
+                idx += 1
+            rows.append(row)
+
+        return (rows, width, height, original_size)
