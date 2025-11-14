@@ -1,6 +1,7 @@
 import time
 import os
 
+
 class BMPCompressor:
 
     def __init__(self):
@@ -30,26 +31,25 @@ class BMPCompressor:
         width = len(pixel_data[0]) if height > 0 else 0
 
         start_time = time.time()
-        codes = self._lzw_on_indices(indices)
+        # produce bit-packed LZW payload (variable code width) without external libraries
+        packed_payload = self._lzw_pack_indices_to_bits(indices)
         end_time = time.time()
 
-        # pack codes as 16-bit little-endian words (fixed width)
-        packed = bytearray()
-        for code in codes:
-            # append 16-bit little-endian representation of each code
-            packed += code.to_bytes(2, 'little')
-
-        # write file: magic + original size + width + height + palette + data
+        # write file: magic + version + original size + width + height + palette + data
         with open(output_file, 'wb') as f:
             f.write(b"CMPT365")
+            # version byte (2 = variable-bit LZW format)
+            f.write(bytes([2]))
             f.write(original_size.to_bytes(4, 'big'))
             f.write(width.to_bytes(4, 'big'))
             f.write(height.to_bytes(4, 'big'))
-            # palette length (unsigned short)
-            f.write(len(palette).to_bytes(2, 'big'))
+            # palette length (unsigned int)
+            f.write(len(palette).to_bytes(4, 'big'))
             for (r, g, b) in palette:
                 f.write(bytes([r, g, b]))
-            f.write(packed)
+            # write payload length (4 bytes big-endian) and payload
+            f.write(len(packed_payload).to_bytes(4, 'big'))
+            f.write(packed_payload)
 
         compressed_size = os.path.getsize(output_file)
         ratio = original_size / compressed_size if compressed_size > 0 else 0
@@ -63,30 +63,53 @@ class BMPCompressor:
             "palette_len": len(palette)
         }
 
-    def _lzw_on_indices(self, data):
+    def _lzw_pack_indices_to_bits(self, data):
+        # Implements LZW and packs codes to a bitstream with dynamic code width.
+        # Writes bits LSB-first into the output bytes.
+        if not data:
+            return b""
 
         # initial dictionary contains all single-symbols seen in palette
-        dict_size = max(data) + 1 if data else 0
-        # Ensure at least 1..256 initial dictionary; but we built palette so dict_size equals palette size
-        dictionary = { (i,): i for i in range(dict_size) }
+        init_dict_size = max(data) + 1
+        dictionary = { (i,): i for i in range(init_dict_size) }
+        dict_size = init_dict_size
+        code_width = max(1, (dict_size - 1).bit_length())
 
-        result = []
-        s = (data[0],) if data else ()
+        out = bytearray()
+        bit_buf = 0
+        bit_count = 0
+
+        def write_code(code, width):
+            nonlocal bit_buf, bit_count
+            bit_buf |= (code << bit_count)
+            bit_count += width
+            while bit_count >= 8:
+                out.append(bit_buf & 0xFF)
+                bit_buf >>= 8
+                bit_count -= 8
+
+        s = (data[0],)
         for c in data[1:]:
             sc = s + (c,)
             if sc in dictionary:
                 s = sc
             else:
-                result.append(dictionary[s])
+                write_code(dictionary[s], code_width)
                 if dict_size < self.max_dict_size:
                     dictionary[sc] = dict_size
                     dict_size += 1
+                    # increase code width when we've filled current width
+                    if dict_size == (1 << code_width):
+                        code_width += 1
                 s = (c,)
 
         if s:
-            result.append(dictionary[s])
+            write_code(dictionary[s], code_width)
 
-        return result
+        if bit_count > 0:
+            out.append(bit_buf & 0xFF)
+
+        return bytes(out)
 
 
 class BMPDecompressor:
@@ -99,10 +122,15 @@ class BMPDecompressor:
             raise ValueError("Not a CMPT365 file")
 
         pos = 7
+        # read version byte
+        version = data[pos]; pos += 1
+        if version != 2:
+            raise ValueError("Unsupported CMPT365 version")
+
         original_size = int.from_bytes(data[pos:pos+4], 'big'); pos += 4
         width = int.from_bytes(data[pos:pos+4], 'big'); pos += 4
         height = int.from_bytes(data[pos:pos+4], 'big'); pos += 4
-        palette_len = int.from_bytes(data[pos:pos+2], 'big'); pos += 2
+        palette_len = int.from_bytes(data[pos:pos+4], 'big'); pos += 4
 
         palette = []
         for _ in range(palette_len):
@@ -110,11 +138,64 @@ class BMPDecompressor:
             palette.append((r, g, b))
             pos += 3
 
-        packed = data[pos:]
+        # read payload length and payload
+        if pos + 4 > len(data):
+            raise ValueError("Corrupt file: missing payload length")
+        payload_len = int.from_bytes(data[pos:pos+4], 'big'); pos += 4
+        if pos + payload_len > len(data):
+            raise ValueError("Corrupt file: truncated payload")
+        packed = data[pos:pos+payload_len]
 
-        # unpack 16-bit little-endian codes
-        # If packed length is odd, ignore the final partial byte.
-        codes = [int.from_bytes(packed[i:i+2], 'little') for i in range(0, len(packed) - (len(packed) % 2), 2)]
+        # bit-level LZW decode (LSB-first)
+        def read_codes_from_bits(packed_bytes, init_dict_size):
+            bit_buf = 0
+            bit_count = 0
+            byte_pos = 0
+
+            def read_bits(n):
+                nonlocal bit_buf, bit_count, byte_pos
+                while bit_count < n:
+                    if byte_pos < len(packed_bytes):
+                        bit_buf |= packed_bytes[byte_pos] << bit_count
+                        byte_pos += 1
+                        bit_count += 8
+                    else:
+                        # not enough bits
+                        return None
+                mask = (1 << n) - 1
+                val = bit_buf & mask
+                bit_buf >>= n
+                bit_count -= n
+                return val
+
+            dict_size = init_dict_size
+            code_width = max(1, (dict_size - 1).bit_length())
+
+            # read first code
+            first = read_bits(code_width)
+            if first is None:
+                return []
+            codes = [first]
+
+            while True:
+                # adjust code width if needed (note: code_width may have been increased when dict_size crossed boundary)
+                if dict_size == (1 << code_width):
+                    code_width += 1
+
+                code = read_bits(code_width)
+                if code is None:
+                    break
+                codes.append(code)
+                # we cannot know about dict growth here precisely; growth happens during decode loop
+                dict_size += 1
+                if dict_size >= 65536:
+                    dict_size = 65536
+
+            return codes
+
+        # convert packed bits to codes
+        init_dict_size = palette_len if palette_len > 0 else 0
+        codes = read_codes_from_bits(packed, init_dict_size)
 
         # LZW decompression on integer symbols
         dict_size = len(palette)
