@@ -4,6 +4,7 @@
 # Installation (in terminal):
 #   pip install PyQt5
 import sys
+import os
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QPushButton, QLabel,
     QFileDialog, QTextEdit, QSlider, QHBoxLayout, QCheckBox
@@ -198,7 +199,36 @@ class BMPViewer(QWidget):
         self.metadata_box.append(f"Time: {info['time_ms']:.2f} ms")
 
     def decompress_file(self):
-        pass
+        filepath, _ = QFileDialog.getOpenFileName(self, "Open CMPT365 File", "", "CMPT365 Files (*.cmpt365)")
+        if not filepath:
+            return
+
+        decompressor = BMPDecompressor()
+        try:
+            rows, width, height, original_size = decompressor.decompress(filepath)
+        except Exception as e:
+            self.metadata_box.append(f"Failed to decompress: {e}")
+            return
+
+        # set state and display
+        self.original_pixels = rows
+        self.width = width
+        self.height = height
+
+        compressed_size = os.path.getsize(filepath)
+
+        self.metadata_box.append(f"\nOpened compressed file: {filepath}")
+        self.metadata_box.append(f"Original BMP size (from header): {original_size} bytes")
+        self.metadata_box.append(f"Compressed file size: {compressed_size} bytes")
+
+        # try show compression ratio if possible
+        try:
+            ratio = original_size / compressed_size if compressed_size > 0 else 0
+            self.metadata_box.append(f"Compression ratio (orig/compressed): {ratio:.3f}")
+        except Exception:
+            pass
+
+        self.update_image()
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
